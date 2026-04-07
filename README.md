@@ -33,3 +33,8 @@ Detailed usage is documented in:
 
 - This project may include `.pth` model weights under `Networks/`.
 - `.pth` files over 100 MB require Git LFS on GitHub.
+
+## License
+
+- License: GNU General Public License v3.0 (`LICENSE`)
+- Copyright and attribution details: `COPYRIGHT.md`
