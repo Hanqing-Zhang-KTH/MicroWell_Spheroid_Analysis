@@ -1,6 +1,6 @@
 # Microwell Spheroid Profiling
 
-Windows-focused GUI pipeline for spheroid quantification, post-analysis, and composition profiling.
+GUI pipeline for spheroid quantification, post-analysis, and composition profiling. Tested in Windows.
 
 Use `Microwell_Spheroid_Profiling_GUI.py` as the primary entry point.
 
