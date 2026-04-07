@@ -38,3 +38,10 @@ Detailed usage is documented in:
 
 - License: GNU General Public License v3.0 (`LICENSE`)
 - Copyright and attribution details: `COPYRIGHT.md`
+
+## Project Governance
+
+- Contribution process and branch workflow: `CONTRIBUTING.md`
+- Owner-review rule for all changes: `.github/CODEOWNERS`
+- Pull request checklist: `.github/pull_request_template.md`
+- One-time repository owner setup (visibility, branch protection, collaborators): `MAINTAINER_SETUP.md`
