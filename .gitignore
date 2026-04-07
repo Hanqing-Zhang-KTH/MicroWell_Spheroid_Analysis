@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local virtual environment
+.spheroid_gui_venv/
+.venv/
+venv/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Runtime outputs
+Results/
+Training/
+*.log
+
+# Keep model weights tracked via Git LFS if needed
+# *.pth

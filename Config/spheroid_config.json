@@ -1,0 +1,119 @@
+{
+  "paths": {
+    "dataset_root": "Dataset",
+    "results_root": "Results"
+  },
+  "//copyright": [
+    "Research group:",
+    "Bj\u00f6rn \u00d6nfelt Group",
+    "Department of Applied Physics, Division of Biophysics",
+    "Royal Institute of Technology",
+    "",
+    "Coding author:",
+    "Hanqing Zhang, Researcher, Royal Institute of Technology, hanzha@kth.se"
+  ],
+  "data_loading": {
+    "sample_folder_keyword": "spheroid",
+    "channels": {
+      "nucleus": {
+        "name_keyword": "DRAQ5",
+        "raw_keyword": "raw",
+        "mask_keyword": "mask"
+      },
+      "tumor": {
+        "name_keyword": "HCT",
+        "raw_keyword": "raw",
+        "mask_keyword": "mask"
+      },
+      "fibroblast": {
+        "name_keyword": "BJ",
+        "raw_keyword": "raw",
+        "mask_keyword": "mask"
+      }
+    }
+  },
+  "quantification": {
+    "mode": "mix_mode",
+    "global_thresholds": {
+      "tumor_rfp": 280,
+      "fibroblast_gfp": 295,
+      "nucleus_draq5": 490
+    },
+    "dl_mode": {
+      "network_type": "3d",
+      "config_csv_3d": "DeeplabV3Plus_Segm_VAST_Betacell3D.csv",
+      "config_csv_2d": "DeeplabV3Plus_Segm_VAST_BetaCells2D.csv",
+      "class_label_id_foreground": 1,
+      "foreground_value_in_mask": 255,
+      "sliding_window_overlap": 0.25
+    },
+    "mix_mode": {
+      "nucleus": "manual",
+      "tumor": "global",
+      "fibroblast": "manual"
+    },
+    "mix_mode_options": [
+      "global",
+      "3d",
+      "2d",
+      "manual"
+    ]
+  },
+  "preprocessing": {
+    "enable_gaussian_blur": true,
+    "gaussian_sigma": 1.6,
+    "gaussian_kernel_size": 5
+  },
+  "manual_mask_preprocessing": {
+    "gaussian_sigma": 1.6,
+    "gaussian_kernel_size": 5,
+    "reconstruct_threshold": 0.5,
+    "size_filter_radius": 3.0,
+    "min_object_voxels": 0
+  },
+  "post_analysis": {
+    "enable_watershed_refinement": true,
+    "averaging": {
+      "enable_watershed_refinement": true,
+      "channel_enable": {
+        "nucleus": true,
+        "tumor": true,
+        "fibroblast": true
+      }
+    },
+    "channel_enable": {
+      "nucleus": false,
+      "tumor": false,
+      "fibroblast": false
+    },
+    "watershed_downsize_ratio": 0.5,
+    "window_size": 3,
+    "smooth_kernel_divisor": 2.0,
+    "smooth_threshold1": 0.5,
+    "cellsize_dog_kernel": [
+      3.0,
+      8.0
+    ],
+    "watershed_elevation": "distance",
+    "watershed_marker_min_distance_pixels": 5,
+    "watershed_marker_dog_min": 0.0,
+    "min_cell_volume_voxels": 1000,
+    "final_smooth_sigma": 0.6,
+    "final_smooth_threshold": 0.5,
+    "refinement_debug_save_slices": false
+  },
+  "composition_profiling": {
+    "voxel_size_um": {
+      "x": 0.419,
+      "y": 0.419,
+      "z": 1.0
+    },
+    "refractive_index_correction": 1.0,
+    "outer_band_range_um": 10.0,
+    "single_cell_voxel_estimate": 6000,
+    "spheroid_mask_channel": "nucleus",
+    "cell_type_A_channel": "tumor",
+    "cell_type_B_channel": "fibroblast",
+    "equal_volume_partitions": 10
+  }
+}

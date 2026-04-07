@@ -1,0 +1,10 @@
+# Isolated runtime dependencies for Spheroid_Profiling_GUI.py
+# Keep NumPy < 2 to avoid binary compatibility issues in some stacks.
+numpy<2
+scipy
+scikit-image
+matplotlib
+pandas
+tifffile
+psutil
+openpyxl
