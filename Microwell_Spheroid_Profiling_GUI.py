@@ -23,14 +23,40 @@ import venv
 from datetime import datetime
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import numpy as np
-import tifffile
+try:
+    import numpy as np
+    import tifffile
+    from functions.data_loading import SampleDataPaths, discover_samples
+    from functions.io_utils import load_json_config
+except Exception:
+    # Allow bootstrap to run even when scientific stack is not yet installed
+    # in the system interpreter. These modules are loaded after venv bootstrap.
+    np = None  # type: ignore[assignment]
+    tifffile = None  # type: ignore[assignment]
+    SampleDataPaths = Any  # type: ignore[assignment]
+    discover_samples = None  # type: ignore[assignment]
+    load_json_config = None  # type: ignore[assignment]
 
-from functions.data_loading import SampleDataPaths, discover_samples
-from functions.io_utils import load_json_config
+
+def _ensure_runtime_imports() -> None:
+    """Import runtime modules after private-venv bootstrap."""
+    global np, tifffile, SampleDataPaths, discover_samples, load_json_config
+    if np is not None and tifffile is not None and discover_samples is not None and load_json_config is not None:
+        return
+    import numpy as _np
+    import tifffile as _tifffile
+    from functions.data_loading import SampleDataPaths as _SampleDataPaths, discover_samples as _discover_samples
+    from functions.io_utils import load_json_config as _load_json_config
+
+    np = _np
+    tifffile = _tifffile
+    SampleDataPaths = _SampleDataPaths
+    discover_samples = _discover_samples
+    load_json_config = _load_json_config
 
 
 def _read_tiff_stack_robust(path: Path) -> np.ndarray:
@@ -213,6 +239,32 @@ def _repair_binary_stack(py_exe: Path, project_root: Path) -> None:
     )
 
 
+def _python_minor(py_exe: Path) -> tuple[int, int]:
+    completed = subprocess.run(
+        [str(py_exe), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Cannot determine Python version for {py_exe}: {completed.stderr.strip()}")
+    parts = completed.stdout.strip().split(".")
+    if len(parts) < 2:
+        raise RuntimeError(f"Unexpected Python version output: '{completed.stdout.strip()}'")
+    return int(parts[0]), int(parts[1])
+
+
+def _assert_supported_python_for_torch(py_exe: Path) -> None:
+    major, minor = _python_minor(py_exe)
+    if major != 3 or minor < 10 or minor > 12:
+        raise RuntimeError(
+            "Unsupported Python version for bundled torch stack: "
+            f"{major}.{minor}. Please run with Python 3.10, 3.11, or 3.12 "
+            "(3.11 recommended)."
+        )
+
+
 def ensure_isolated_runtime(project_root: Path) -> None:
     """
     Ensure GUI runs in a private project venv so user/system Python is untouched.
@@ -233,6 +285,8 @@ def ensure_isolated_runtime(project_root: Path) -> None:
         print(f"[bootstrap] Creating private venv: {venv_dir}")
         builder = venv.EnvBuilder(with_pip=True, clear=False)
         builder.create(str(venv_dir))
+
+    _assert_supported_python_for_torch(target_py)
 
     expected_hash = _sha256_file(req_path)
     current_hash = req_hash_marker.read_text(encoding="utf-8").strip() if req_hash_marker.exists() else ""
@@ -1065,6 +1119,7 @@ class SpheroidProfilingGUI(tk.Tk):
 def main() -> None:
     project_root = Path(__file__).resolve().parent
     ensure_isolated_runtime(project_root)
+    _ensure_runtime_imports()
     config_path = project_root / "Config" / "spheroid_config.json"
     app = SpheroidProfilingGUI(project_root=project_root, config_path=config_path)
     app.mainloop()
