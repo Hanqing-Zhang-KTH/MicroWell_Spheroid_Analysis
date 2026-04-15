@@ -339,7 +339,6 @@ def main() -> None:
         avg_refine = post_cfg.get("enable_watershed_refinement_averaging", True)
     post_cfg["enable_watershed_refinement"] = bool(avg_refine)
 
-    # Use averaging-specific per-channel switches when provided.
     if isinstance(avg_cfg, dict):
         avg_ch = avg_cfg.get("apply_cell_separation", avg_cfg.get("channel_enable", None))
         if isinstance(avg_ch, dict):

@@ -21,33 +21,33 @@ Coding author: Hanqing Zhang (hanzha@kth.se)
 4. Dependencies are installed into this private venv only (system Python unchanged).
 5. If NVIDIA CUDA is detected, GUI installs CUDA PyTorch wheels automatically.
 
-## Required Folder Structure for Input Data
+## Input Data (New Convention)
 
-Set `dataset_root` in config/GUI Paths panel to a folder shaped like:
+Input is now a **folder of TIFF files** (absolute path is fine), e.g. `D:\Data_260415`.
 
-```text
-dataset_root/
-  <experiment_name>/
-    spheroid_1/
-      ... 3-channel raw TIFFs + 3-channel manual mask TIFFs ...
-    spheroid_2/
-      ...
-```
+Each `.tif/.tiff` file is treated as one sample. The filename must end with a suffix starting with `_`
+(before the extension). The sample name is that suffix without `_`.
 
-Sample discovery uses:
+Example:
 
-- `data_loading.sample_folder_keyword` (default: `spheroid`)
-- suffix `_number` (e.g., `spheroid_1`)
-- all 3 channels must be complete (raw + mask) to appear in GUI Samples list.
+- `Tiff_17_3_Ch2_A498_BJ_Image1.tif` → sample name: `Image1`
+
+Each TIFF is expected to have shape `(6, Z, Y, X)` with channels:
+
+1. tumor raw
+2. fibroblast raw
+3. nucleus raw
+4. tumor mask
+5. fibroblast mask
+6. nucleus mask
 
 ## GUI Usage Workflow
 
-1. **Paths tab**
-   - Set `dataset_root` and `results_root`.
-   - Click **Save Paths to JSON**.
-2. **Samples tab**
-   - Click **Refresh Samples**.
-   - Double-click rows to mark `[x]` for selected samples.
+1. **Samples tab**
+   - Click **Select Folder** to choose the folder containing TIFF files.
+   - Enter an experiment name (default `Default_Experiment`) and click **Confirm**.
+   - Set **Results root** if needed and click **Confirm**.
+   - Click **Refresh Samples** and double-click rows to mark `[x]` for selected samples.
 3. **Parameters tab**
    - Edit non-path settings (quantification/post-analysis/etc.).
    - Click **Save Changes**.
@@ -66,6 +66,7 @@ Outputs are saved as:
 results_root/
   <experiment_name>/
     <sample_name>/
+      Input/
       Thresholding/
       DL_masks/
       Refinement/

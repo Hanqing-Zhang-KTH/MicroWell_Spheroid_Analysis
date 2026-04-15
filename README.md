@@ -8,7 +8,7 @@ Use `Microwell_Spheroid_Profiling_GUI.py` as the primary entry point.
 
 1. Run `Run_GUI_Windows.bat` (double-click) or:
    - `python Microwell_Spheroid_Profiling_GUI.py`
-2. In the GUI Paths tab, set `dataset_root` and `results_root`.
+2. In the GUI Samples tab, select the TIFF folder and set experiment name.
 3. Refresh samples, select `[x]`, and click **Run Profiling**.
 
 ## Release / Download (For Non-Technical Users)
