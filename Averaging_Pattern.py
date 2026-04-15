@@ -22,7 +22,6 @@ import tifffile
 from scipy import ndimage as ndi
 from skimage import measure
 
-from functions.data_loading import discover_samples
 from functions.io_utils import load_json_config, ensure_dir
 from functions.post_analysis import run_post_analysis
 from functions.composition_profiling import run_composition_profiling
@@ -92,6 +91,37 @@ def _read_tiff_stack_robust(path: Path) -> np.ndarray:
                 out[i] = p.asarray()
             return out
     return arr
+
+
+def _find_input_tiff(sample_dir: Path) -> Path:
+    input_dir = sample_dir / "Input"
+    candidates: list[Path] = []
+    if input_dir.exists():
+        candidates.extend(sorted(input_dir.glob("*.tif")))
+        candidates.extend(sorted(input_dir.glob("*.tiff")))
+    if not candidates:
+        candidates.extend(sorted(sample_dir.glob("*.tif")))
+        candidates.extend(sorted(sample_dir.glob("*.tiff")))
+    if not candidates:
+        raise FileNotFoundError(f"No input TIFF found under {sample_dir}/Input (or sample root).")
+    return candidates[0]
+
+
+def _load_6ch_tiff(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    arr = np.asarray(tifffile.imread(str(path)))
+    if arr.ndim != 4 or arr.shape[0] != 6:
+        raise RuntimeError(f"Expected input TIFF shape (6, Z, Y, X), got {arr.shape} for {path}")
+    raw = {
+        "tumor": arr[0].astype(np.float32),
+        "fibroblast": arr[1].astype(np.float32),
+        "nucleus": arr[2].astype(np.float32),
+    }
+    masks = {
+        "tumor": (arr[3] > 0),
+        "fibroblast": (arr[4] > 0),
+        "nucleus": (arr[5] > 0),
+    }
+    return raw, masks
 
 
 def _shift_stack(stack: np.ndarray, shift_zyx: np.ndarray, order: int) -> np.ndarray:
@@ -195,15 +225,9 @@ def main() -> None:
     cfg_path = (project_root / args.config) if not Path(args.config).is_absolute() else Path(args.config)
     cfg = load_json_config(cfg_path)
     paths_cfg = cfg["paths"]
-    dataset_root = project_root / paths_cfg["dataset_root"]
-    results_root = project_root / paths_cfg["results_root"]
-
-    discovered = discover_samples(
-        dataset_root=dataset_root,
-        sample_folder_keyword=cfg["data_loading"]["sample_folder_keyword"],
-        channels_cfg=cfg["data_loading"]["channels"],
-    )
-    sample_lookup = {(s.experiment_name, s.name): s for s in discovered}
+    rr = str(paths_cfg.get("results_root", "Results"))
+    rp = Path(rr)
+    results_root = (rp if rp.is_absolute() else (project_root / rp)).resolve()
 
     channel = args.channel.lower()
     channels = ["nucleus", "tumor", "fibroblast"]
@@ -221,24 +245,13 @@ def main() -> None:
         if len(rel.parts) < 2:
             raise RuntimeError(f"Result sample path must be Results/<experiment>/<sample>: {sample_dir}")
         experiment_name, sample_name = rel.parts[0], rel.parts[1]
-        key = (experiment_name, sample_name)
-        if key not in sample_lookup:
-            raise RuntimeError(f"Sample not found in Dataset: {experiment_name}/{sample_name}")
-        sample = sample_lookup[key]
-
-        raw_align_path = {
-            "nucleus": sample.nucleus.raw,
-            "tumor": sample.tumor.raw,
-            "fibroblast": sample.fibroblast.raw,
-        }[channel]
-
-        raw_align = np.asarray(_read_tiff_stack_robust(raw_align_path), dtype=np.float32)
-        mask_align, mask_align_path = _load_mask_matching_raw_shape(
-            sample_dir, sample_name, channel, tuple(raw_align.shape)
-        )
+        input_tiff = _find_input_tiff(sample_dir)
+        raw_ch, mask_ch = _load_6ch_tiff(input_tiff)
+        raw_align = raw_ch[channel]
+        mask_align = mask_ch[channel]
         if template_shape is None:
             template_shape = raw_align.shape
-        elif raw_align.shape != template_shape:
+        elif raw_align.shape != template_shape or mask_align.shape != template_shape:
             raise RuntimeError(
                 f"Sample shape mismatch. Template {template_shape}, got {raw_align.shape} "
                 f"for {experiment_name}/{sample_name}."
@@ -251,11 +264,8 @@ def main() -> None:
         print(f"[Averaging] [{i}/{len(sample_dirs)}] {experiment_name}/{sample_name} shift={shift.round(3)}")
 
         for ch in channels:
-            raw_path = {"nucleus": sample.nucleus.raw, "tumor": sample.tumor.raw, "fibroblast": sample.fibroblast.raw}[ch]
-            raw = np.asarray(_read_tiff_stack_robust(raw_path), dtype=np.float32)
-            mask, mask_path = _load_mask_matching_raw_shape(
-                sample_dir, sample_name, ch, tuple(raw.shape)
-            )
+            raw = raw_ch[ch]
+            mask = mask_ch[ch]
 
             if raw.shape != template_shape or mask.shape != template_shape:
                 raise RuntimeError(

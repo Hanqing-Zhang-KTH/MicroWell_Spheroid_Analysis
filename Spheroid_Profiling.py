@@ -13,6 +13,7 @@ Hanqing Zhang, Researcher, Royal Institute of Technology, hanzha@kth.se, hanzha@
 from __future__ import annotations
 
 import argparse
+import shutil
 import time
 import warnings
 from pathlib import Path
@@ -138,16 +139,22 @@ def _parse_args() -> argparse.Namespace:
         help="Path to JSON configuration file.",
     )
     parser.add_argument(
-        "--experiment",
+        "--input-tiff",
         type=str,
         default="",
-        help="Optional experiment name filter.",
+        help="Absolute path to a 6-channel TIFF (tumor,fibro,nucleus,tumorMask,fibroMask,nucleusMask).",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="Default_Experiment",
+        help="Experiment name used for results folder structure.",
     )
     parser.add_argument(
         "--sample",
         type=str,
         default="",
-        help="Optional sample name filter (e.g. spheroid_1).",
+        help="Optional sample name override (default parsed from TIFF name suffix).",
     )
     return parser.parse_args()
 
@@ -161,7 +168,9 @@ def process_sample(
     sample_tag = f"{sample.experiment_name}/{sample.name}"
     print(f"  [Sample {sample_tag}] Starting processing.")
     paths_cfg = cfg["paths"]
-    results_root = ensure_dir(project_root / paths_cfg["results_root"])
+    rr = str(paths_cfg.get("results_root", "Results"))
+    rp = Path(rr)
+    results_root = ensure_dir(rp if rp.is_absolute() else (project_root / rp))
 
     experiment_results = ensure_dir(results_root / sample.experiment_name)
     sample_results = ensure_dir(experiment_results / sample.name)
@@ -171,15 +180,29 @@ def process_sample(
     thr_dir = ensure_dir(sample_results / "Thresholding")
     dl_dir = ensure_dir(sample_results / "DL_masks")
     refine_dir = ensure_dir(sample_results / "Refinement")
+    input_dir = ensure_dir(sample_results / "Input")
+    try:
+        shutil.copy2(sample.tiff_path, input_dir / sample.tiff_path.name)
+    except Exception:
+        # Copy is best-effort (large files / permission issues).
+        pass
 
     t_step1 = time.perf_counter()
-    print(f"  [Sample {sample_tag}] Step 1/3: Loading intensities and manual masks...")
-    nuc_raw = _load_stack(sample.nucleus.raw)
-    nuc_man = _load_binary_mask(sample.nucleus.mask)
-    tumor_raw = _load_stack(sample.tumor.raw)
-    tumor_man = _load_binary_mask(sample.tumor.mask)
-    fibro_raw = _load_stack(sample.fibroblast.raw)
-    fibro_man = _load_binary_mask(sample.fibroblast.mask)
+    print(f"  [Sample {sample_tag}] Step 1/3: Loading 6-channel TIFF (raw + provided masks)...")
+    stack6 = np.asarray(tifffile.imread(str(sample.tiff_path)))
+    if stack6.ndim != 4 or stack6.shape[0] != 6:
+        raise RuntimeError(
+            f"Expected TIFF shape (6, Z, Y, X) for {sample.tiff_path}, got {stack6.shape}."
+        )
+
+    # New convention (channel-first):
+    # 0 tumor raw, 1 fibro raw, 2 nucleus raw, 3 tumor mask, 4 fibro mask, 5 nucleus mask
+    tumor_raw = stack6[0].astype(np.float32)
+    fibro_raw = stack6[1].astype(np.float32)
+    nuc_raw = stack6[2].astype(np.float32)
+    tumor_man = stack6[3] > 0
+    fibro_man = stack6[4] > 0
+    nuc_man = stack6[5] > 0
 
     # Optional intensity preprocessing
     pre_cfg = cfg.get("preprocessing", {})
@@ -217,7 +240,7 @@ def process_sample(
             thr_val = float(thr_cfg.get(thr_key, 0))
             return (raw >= thr_val).astype(bool)
         if method == "manual":
-            print(f"    Quantifying {ch_display}: manual mask + preprocessing")
+            print(f"    Quantifying {ch_display}: provided mask + preprocessing")
             src = {"nucleus": nuc_man, "tumor": tumor_man, "fibroblast": fibro_man}[ch_name]
             keep_largest = ch_name == "nucleus"
             return _manual_mask_preprocess(src, cfg, keep_largest=keep_largest)
@@ -398,28 +421,31 @@ def main() -> None:
     cfg_path = (project_root / args.config) if not Path(args.config).is_absolute() else Path(args.config)
     cfg = load_json_config(cfg_path)
 
-    paths_cfg = cfg["paths"]
-    dataset_root = project_root / paths_cfg["dataset_root"]
+    if not args.input_tiff:
+        raise RuntimeError("Missing --input-tiff. Provide an absolute path to a 6-channel TIFF.")
 
-    data_cfg = cfg["data_loading"]
-    samples = discover_samples(
-        dataset_root=dataset_root,
-        sample_folder_keyword=data_cfg["sample_folder_keyword"],
-        channels_cfg=data_cfg["channels"],
-    )
-    if args.experiment:
-        samples = [s for s in samples if s.experiment_name == args.experiment]
-    if args.sample:
-        samples = [s for s in samples if s.name == args.sample]
+    tiff_path = Path(args.input_tiff)
+    if not tiff_path.exists():
+        raise FileNotFoundError(f"Input TIFF not found: {tiff_path}")
 
-    if not samples:
-        print("No matching samples found with current filters/config.")
-        return
+    exp_name = str(args.experiment).strip() or "Default_Experiment"
+    sample_name = str(args.sample).strip()
+    if not sample_name:
+        stem = tiff_path.stem
+        if "_" not in stem:
+            raise RuntimeError(f"Cannot parse sample name from TIFF (missing '_<suffix>'): {tiff_path.name}")
+        sample_name = stem.rsplit("_", 1)[-1].strip()
+        if not sample_name:
+            raise RuntimeError(f"Cannot parse non-empty sample name suffix from TIFF: {tiff_path.name}")
 
-    print(f"Found {len(samples)} spheroid samples.")
-    for idx, sample in enumerate(samples, start=1):
-        print(f"[{idx}/{len(samples)}] Processing sample: {sample.experiment_name}/{sample.name}")
-        process_sample(sample, cfg, project_root)
+    sample = type("Sample", (), {})()
+    sample.experiment_name = exp_name
+    sample.name = sample_name
+    sample.tiff_path = tiff_path
+
+    print("Found 1 spheroid sample (single TIFF mode).")
+    print(f"[1/1] Processing sample: {sample.experiment_name}/{sample.name}")
+    process_sample(sample, cfg, project_root)
 
 
 if __name__ == "__main__":

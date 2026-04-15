@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -25,7 +26,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 try:
     import numpy as np
@@ -345,7 +346,6 @@ class SpheroidProfilingGUI(tk.Tk):
         self.minsize(860, 560)
 
         self.cfg: dict = {}
-        self.path_vars: dict[str, tk.StringVar] = {}
         self.sample_selected: dict[str, bool] = {}
         self.sample_map: dict[str, SampleDataPaths] = {}
         self.result_selected: dict[str, bool] = {}
@@ -359,6 +359,10 @@ class SpheroidProfilingGUI(tk.Tk):
         self._in_error_trace = False
         self._suppress_warning_context = False
         self._msg_queue: queue.Queue[str] = queue.Queue()
+        self.input_folder_var = tk.StringVar(value=str((self.project_root / "Dataset").resolve()))
+        self.results_root_var = tk.StringVar(value=str((self.project_root / "Results").resolve()))
+        self.experiment_entry_var = tk.StringVar(value="Default_Experiment")
+        self.active_experiment_name: str = "Default_Experiment"
 
         self._build_ui()
         self._load_config_into_ui()
@@ -391,16 +395,13 @@ class SpheroidProfilingGUI(tk.Tk):
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=8, pady=4)
 
-        self.paths_tab = ttk.Frame(notebook, padding=8)
         self.samples_tab = ttk.Frame(notebook, padding=8)
         self.results_tab = ttk.Frame(notebook, padding=8)
         self.params_tab = ttk.Frame(notebook, padding=8)
-        notebook.add(self.paths_tab, text="Paths")
         notebook.add(self.samples_tab, text="Samples")
         notebook.add(self.results_tab, text="Results")
         notebook.add(self.params_tab, text="Parameters")
 
-        self._build_paths_tab()
         self._build_samples_tab()
         self._build_results_tab()
         self._build_params_tab()
@@ -416,21 +417,27 @@ class SpheroidProfilingGUI(tk.Tk):
         copyright_text = "Björn Önfelt Group, KTH | Author: Hanqing Zhang (hanzha@kth.se)"
         ttk.Label(bottom, text=copyright_text, foreground="#555555").pack(side="right")
 
-    def _build_paths_tab(self) -> None:
-        self.paths_form = ttk.Frame(self.paths_tab)
-        self.paths_form.pack(fill="x", pady=(0, 10))
-
-        btn_row = ttk.Frame(self.paths_tab)
-        btn_row.pack(fill="x")
-        ttk.Button(btn_row, text="Save Paths to JSON", command=self._save_paths_to_json).pack(side="left")
-        ttk.Button(btn_row, text="Reset Paths from JSON", command=self._reset_paths_from_json).pack(side="left", padx=(8, 0))
-
     def _build_samples_tab(self) -> None:
-        row = ttk.Frame(self.samples_tab)
-        row.pack(fill="x", pady=(0, 8))
-        ttk.Button(row, text="Refresh Samples", command=self.refresh_samples).pack(side="left")
-        self.samples_info_label = ttk.Label(row, text="")
+        row1 = ttk.Frame(self.samples_tab)
+        row1.pack(fill="x", pady=(0, 8))
+        ttk.Label(row1, text="Sample folder:").pack(side="left")
+        ttk.Entry(row1, textvariable=self.input_folder_var, width=58).pack(side="left", padx=(6, 6))
+        ttk.Button(row1, text="Select Folder", command=self._choose_input_folder).pack(side="left")
+
+        ttk.Label(row1, text="Experiment name:").pack(side="left", padx=(12, 4))
+        ttk.Entry(row1, textvariable=self.experiment_entry_var, width=22).pack(side="left")
+        ttk.Button(row1, text="Confirm", command=self._confirm_experiment_name).pack(side="left", padx=(6, 10))
+
+        ttk.Button(row1, text="Refresh Samples", command=self.refresh_samples).pack(side="left")
+        self.samples_info_label = ttk.Label(row1, text="")
         self.samples_info_label.pack(side="left", padx=(12, 0))
+
+        row2 = ttk.Frame(self.samples_tab)
+        row2.pack(fill="x", pady=(0, 8))
+        ttk.Label(row2, text="Results root:").pack(side="left")
+        ttk.Entry(row2, textvariable=self.results_root_var, width=74).pack(side="left", padx=(6, 6))
+        ttk.Button(row2, text="Confirm", command=self._confirm_results_root).pack(side="left")
+        ttk.Button(row2, text="Reset to default", command=self._reset_to_default).pack(side="left", padx=(8, 0))
 
         cols = ("selected", "experiment", "sample", "status")
         self.samples_tree = ttk.Treeview(self.samples_tab, columns=cols, show="headings", height=14)
@@ -447,10 +454,58 @@ class SpheroidProfilingGUI(tk.Tk):
 
         help_lbl = ttk.Label(
             self.samples_tab,
-            text="Double-click a row to toggle Run [x]/[ ]. Only fully valid samples are listed.",
+            text="Double-click a row to toggle Run [x]/[ ]. Samples are TIFF files in the selected folder.",
             foreground="#555555",
         )
         help_lbl.pack(anchor="w", pady=(6, 0))
+
+    def _choose_input_folder(self) -> None:
+        initial = self.input_folder_var.get().strip()
+        init_dir = initial if initial and Path(initial).exists() else str(self.project_root.resolve())
+        chosen = filedialog.askdirectory(initialdir=init_dir, title="Select folder containing TIFF files")
+        if chosen:
+            self.input_folder_var.set(chosen)
+            self.refresh_samples()
+
+    def _confirm_experiment_name(self) -> None:
+        raw = self.experiment_entry_var.get().strip()
+        name = raw or "Default_Experiment"
+        name = re.sub(r"[<>:\"/\\\\|?*]+", "_", name).strip()
+        if not name:
+            name = "Default_Experiment"
+        self.active_experiment_name = name
+        self.experiment_entry_var.set(name)
+        self._log(f"Experiment name set to: {name}")
+        self.refresh_samples(silent=True)
+
+    def _confirm_results_root(self) -> None:
+        raw = self.results_root_var.get().strip()
+        if not raw:
+            messagebox.showerror("Results root", "Results root cannot be empty.")
+            return
+        p = Path(raw)
+        if not p.is_absolute():
+            p = (self.project_root / p).resolve()
+        self.results_root_var.set(str(p))
+        self.cfg.setdefault("paths", {})
+        self.cfg["paths"]["results_root"] = str(p)
+        self._write_config()
+        self._log(f"Results root confirmed: {p}")
+        self.refresh_results_tree()
+
+    def _reset_to_default(self) -> None:
+        default_sample = (self.project_root / "Dataset").resolve()
+        default_results = (self.project_root / "Results").resolve()
+        self.input_folder_var.set(str(default_sample))
+        self.results_root_var.set(str(default_results))
+        self.active_experiment_name = "Default_Experiment"
+        self.experiment_entry_var.set("Default_Experiment")
+        self.cfg.setdefault("paths", {})
+        self.cfg["paths"]["results_root"] = str(default_results)
+        self._write_config()
+        self._log("Reset to default: sample folder, results root, and experiment name.")
+        self.refresh_samples(silent=True)
+        self.refresh_results_tree()
 
     def _build_results_tab(self) -> None:
         row = ttk.Frame(self.results_tab)
@@ -510,22 +565,13 @@ class SpheroidProfilingGUI(tk.Tk):
     def _load_config_into_ui(self) -> None:
         self.cfg = load_json_config(self.config_path)
         self.cfg["paths"] = self._sanitize_paths(self.cfg.get("paths", {}))
-        self._render_paths_form(self.cfg.get("paths", {}))
+        rr = str(self.cfg.get("paths", {}).get("results_root", "")).strip()
+        if rr:
+            p = Path(rr)
+            if not p.is_absolute():
+                p = (self.project_root / p).resolve()
+            self.results_root_var.set(str(p))
         self._render_params_text()
-
-    def _render_paths_form(self, paths_cfg: dict) -> None:
-        for child in self.paths_form.winfo_children():
-            child.destroy()
-        self.path_vars.clear()
-
-        keys = sorted(paths_cfg.keys())
-        for i, key in enumerate(keys):
-            ttk.Label(self.paths_form, text=key, width=28).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 8))
-            var = tk.StringVar(value=str(paths_cfg.get(key, "")))
-            ent = ttk.Entry(self.paths_form, textvariable=var, width=90)
-            ent.grid(row=i, column=1, sticky="ew", pady=3)
-            self.path_vars[key] = var
-        self.paths_form.grid_columnconfigure(1, weight=1)
 
     def _render_params_text(self) -> None:
         non_paths = deepcopy(self.cfg)
@@ -533,28 +579,8 @@ class SpheroidProfilingGUI(tk.Tk):
         self.params_text.delete("1.0", "end")
         self.params_text.insert("1.0", json.dumps(non_paths, indent=2))
 
-    def _collect_paths_from_ui(self) -> dict:
-        return self._sanitize_paths({k: v.get().strip() for k, v in self.path_vars.items()})
-
     def _reload_json(self) -> None:
         self._load_config_into_ui()
-        self.refresh_samples()
-        self.refresh_results_tree()
-
-    def _save_paths_to_json(self) -> None:
-        if not messagebox.askyesno("Confirm Save", "Save current Paths panel values to JSON?"):
-            return
-        self.cfg["paths"] = self._collect_paths_from_ui()
-        self._write_config()
-        self.refresh_samples()
-        self.refresh_results_tree()
-
-    def _reset_paths_from_json(self) -> None:
-        if not messagebox.askyesno("Confirm Reset", "Reset Paths panel from JSON file? Unsaved path edits will be lost."):
-            return
-        disk_cfg = load_json_config(self.config_path)
-        self.cfg["paths"] = self._sanitize_paths(disk_cfg.get("paths", {}))
-        self._render_paths_form(self.cfg["paths"])
         self.refresh_samples()
         self.refresh_results_tree()
 
@@ -569,7 +595,9 @@ class SpheroidProfilingGUI(tk.Tk):
             messagebox.showerror("Invalid JSON", "Parameters content must be a JSON object.")
             return
 
-        self.cfg = {"paths": self._collect_paths_from_ui(), **parsed}
+        self.cfg.setdefault("paths", {})
+        self.cfg["paths"]["results_root"] = self.results_root_var.get().strip() or str((self.project_root / "Results").resolve())
+        self.cfg = {"paths": self.cfg["paths"], **parsed}
         self._write_config()
         self.refresh_samples()
         self.refresh_results_tree()
@@ -581,21 +609,15 @@ class SpheroidProfilingGUI(tk.Tk):
     def _build_runtime_cfg(self) -> dict:
         # Runtime uses the current in-memory config plus current path fields.
         cfg = deepcopy(self.cfg)
-        cfg["paths"] = self._collect_paths_from_ui()
+        cfg.setdefault("paths", {})
+        cfg["paths"]["results_root"] = self.results_root_var.get().strip() or str((self.project_root / "Results").resolve())
         return cfg
 
     def refresh_samples(self, silent: bool = False) -> None:
         try:
-            cfg = self._build_runtime_cfg()
-            paths_cfg = cfg.get("paths", {})
-            data_cfg = cfg.get("data_loading", {})
-            dataset_root = self.project_root / str(paths_cfg.get("dataset_root", "Dataset"))
-
-            samples = discover_samples(
-                dataset_root=dataset_root,
-                sample_folder_keyword=str(data_cfg.get("sample_folder_keyword", "spheroid")),
-                channels_cfg=data_cfg.get("channels", {}),
-            )
+            folder = Path(self.input_folder_var.get().strip() or (self.project_root / "Dataset"))
+            exp = self.active_experiment_name or (self.experiment_entry_var.get().strip() or "Default_Experiment")
+            samples = discover_samples(tiff_folder=folder, experiment_name=exp)
         except Exception as exc:
             if not silent:
                 messagebox.showerror("Sample Discovery Error", str(exc))
@@ -616,11 +638,11 @@ class SpheroidProfilingGUI(tk.Tk):
                 "",
                 "end",
                 iid=sample_id,
-                values=(mark, s.experiment_name, s.name, "3 channels raw+mask ready"),
+                values=(mark, s.experiment_name, s.name, "6-channel tiff ready"),
             )
 
         self.samples_info_label.config(
-            text=f"Dataset root: {dataset_root} | Valid samples: {len(samples)}"
+            text=f"Input folder: {folder} | Experiment: {self.active_experiment_name} | Samples: {len(samples)}"
         )
 
     def _should_show_log_line(self, text: str) -> bool:
@@ -668,7 +690,10 @@ class SpheroidProfilingGUI(tk.Tk):
     def refresh_results_tree(self) -> None:
         self.results_tree.delete(*self.results_tree.get_children())
         cfg = self._build_runtime_cfg()
-        results_root = self.project_root / str(cfg.get("paths", {}).get("results_root", "Results"))
+        rr = str(cfg.get("paths", {}).get("results_root", "Results")).strip() or "Results"
+        rp = Path(rr)
+        results_root = rp if rp.is_absolute() else (self.project_root / rp)
+        results_root = results_root.resolve()
         self.results_root_label.config(text=f"Results root: {results_root}")
         if not results_root.exists():
             return
@@ -904,13 +929,6 @@ class SpheroidProfilingGUI(tk.Tk):
             messagebox.showinfo("Create Dataset", "No result samples selected in Results panel.")
             return
 
-        cfg = self._build_runtime_cfg()
-        dataset_root = self.project_root / str(cfg.get("paths", {}).get("dataset_root", "Dataset"))
-        channels_cfg = cfg.get("data_loading", {}).get("channels", {})
-        sample_keyword = str(cfg.get("data_loading", {}).get("sample_folder_keyword", "spheroid"))
-        discovered = discover_samples(dataset_root, sample_keyword, channels_cfg)
-        lookup = {(s.experiment_name, s.name): s for s in discovered}
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_root = self.project_root / "Training" / f"{channel}_{timestamp}"
         out_root.mkdir(parents=True, exist_ok=True)
@@ -928,23 +946,27 @@ class SpheroidProfilingGUI(tk.Tk):
             sample_name = str(row[2])
             sample_dir = self.result_sample_paths[sid]
 
-            sample_obj = lookup.get((exp_name, sample_name))
-            if sample_obj is None:
-                self._log(f"[Create Dataset] Skip {exp_name}/{sample_name}: sample not found in Dataset.")
+            input_dir = sample_dir / "Input"
+            input_candidates = list(input_dir.glob("*.tif")) + list(input_dir.glob("*.tiff"))
+            if not input_candidates:
+                self._log(f"[Create Dataset] Skip {exp_name}/{sample_name}: missing Input TIFF under {input_dir}.")
                 continue
-            raw_path = {
-                "nucleus": sample_obj.nucleus.raw,
-                "tumor": sample_obj.tumor.raw,
-                "fibroblast": sample_obj.fibroblast.raw,
-            }[channel]
-            mask_path = self._resolve_generated_mask_path(sample_dir, sample_name, channel)
-            if mask_path is None:
-                self._log(f"[Create Dataset] Skip {exp_name}/{sample_name}: generated mask not found.")
+            input_tiff = sorted(input_candidates, key=lambda p: p.name.lower())[0]
+
+            stack6 = np.asarray(tifffile.imread(str(input_tiff)))
+            if stack6.ndim != 4 or stack6.shape[0] != 6:
+                self._log(f"[Create Dataset] Skip {exp_name}/{sample_name}: invalid TIFF shape {stack6.shape}.")
                 continue
 
-            raw = _read_tiff_stack_robust(raw_path)
-            mask = _read_tiff_stack_robust(mask_path)
-            mask_bin = (np.asarray(mask) > 0).astype(np.uint8) * 255
+            raw = {"tumor": stack6[0], "fibroblast": stack6[1], "nucleus": stack6[2]}[channel]
+
+            mask_path = self._resolve_generated_mask_path(sample_dir, sample_name, channel)
+            if mask_path is not None:
+                mask = _read_tiff_stack_robust(mask_path)
+                mask_bin = (np.asarray(mask) > 0).astype(np.uint8) * 255
+            else:
+                provided = {"tumor": stack6[3], "fibroblast": stack6[4], "nucleus": stack6[5]}[channel]
+                mask_bin = (np.asarray(provided) > 0).astype(np.uint8) * 255
 
             stem = f"{exp_name}_{sample_name}_{channel}"
             raw_out = out_root / f"{stem}_raw.tiff"
@@ -1032,6 +1054,8 @@ class SpheroidProfilingGUI(tk.Tk):
                     str(self.project_root / "Spheroid_Profiling.py"),
                     "--config",
                     str(runtime_cfg_path),
+                    "--input-tiff",
+                    str(sample.tiff_path),
                     "--experiment",
                     sample.experiment_name,
                     "--sample",
