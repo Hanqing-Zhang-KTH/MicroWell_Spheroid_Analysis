@@ -49,7 +49,7 @@
     },
     "mix_mode": {
       "nucleus": "manual",
-      "tumor": "global",
+      "tumor": "manual",
       "fibroblast": "manual"
     },
     "mix_mode_options": [
@@ -75,13 +75,13 @@
     "enable_watershed_refinement": true,
     "averaging": {
       "enable_watershed_refinement": true,
-      "channel_enable": {
+      "apply_cell_separation": {
         "nucleus": true,
         "tumor": true,
         "fibroblast": true
       }
     },
-    "channel_enable": {
+    "apply_cell_separation": {
       "nucleus": false,
       "tumor": false,
       "fibroblast": false

@@ -117,7 +117,7 @@ def _channel_post_cfg(post_cfg: Dict[str, object], channel_key: str) -> tuple[Di
     Return per-channel post-analysis config and whether watershed refinement is enabled.
     """
     base_enabled = bool(post_cfg.get("enable_watershed_refinement", False))
-    ch_enable_cfg = post_cfg.get("channel_enable", {})
+    ch_enable_cfg = post_cfg.get("apply_cell_separation", post_cfg.get("channel_enable", {}))
     if isinstance(ch_enable_cfg, dict):
         enabled = bool(ch_enable_cfg.get(channel_key, base_enabled))
     else:

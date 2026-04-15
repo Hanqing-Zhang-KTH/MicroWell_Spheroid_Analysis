@@ -205,7 +205,7 @@ def _isovolume(raw: np.ndarray, mask: np.ndarray, voxel_cfg: dict) -> tuple[np.n
 def _channel_post_cfg(post_cfg: dict, channel_key: str) -> tuple[dict, bool]:
     """Per-channel enable switch for averaging post-analysis."""
     base_enabled = bool(post_cfg.get("enable_watershed_refinement", False))
-    ch_enable_cfg = post_cfg.get("channel_enable", {})
+    ch_enable_cfg = post_cfg.get("apply_cell_separation", post_cfg.get("channel_enable", {}))
     if isinstance(ch_enable_cfg, dict):
         enabled = bool(ch_enable_cfg.get(channel_key, base_enabled))
     else:
@@ -338,6 +338,12 @@ def main() -> None:
     else:
         avg_refine = post_cfg.get("enable_watershed_refinement_averaging", True)
     post_cfg["enable_watershed_refinement"] = bool(avg_refine)
+
+    # Use averaging-specific per-channel switches when provided.
+    if isinstance(avg_cfg, dict):
+        avg_ch = avg_cfg.get("apply_cell_separation", avg_cfg.get("channel_enable", None))
+        if isinstance(avg_ch, dict):
+            post_cfg["apply_cell_separation"] = dict(avg_ch)
     refinement_dir = ensure_dir(out_root / "Refinement")
 
     instance_labels = {}

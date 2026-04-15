@@ -89,8 +89,8 @@ Recommended baseline:
 - In `quantification.mix_mode`: use per-channel `global`, `3d`, `2d`, or `manual`
 - For manual masks: non-zero values are treated as object (`>0`)
 - Keep `post_analysis.watershed_downsize_ratio = 1.0` for full quality
-- Set per-channel post control in `post_analysis.channel_enable`
-- Set averaging post control in `post_analysis.averaging.channel_enable`
+- Set per-channel cell separation control in `post_analysis.apply_cell_separation`
+- Set averaging cell separation control in `post_analysis.averaging.apply_cell_separation`
 
 ## CUDA / Network Notes
 
