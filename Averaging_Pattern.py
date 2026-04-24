@@ -393,19 +393,23 @@ def main() -> None:
     vote_root = ensure_dir(out_root / "AccumulatedMaskDistributions")
     for ch in channels:
         print(f"[Averaging] Saving vote accumulation for {ch}...", flush=True)
-        # Save counts (compact) and frequency (float) once.
+        # Save vote counts only (compact). Frequency is derived as count / N.
         tifffile.imwrite(str(masks_dir / f"{ch}_VoteCount_uint16.tiff"), mask_counts[ch].astype(np.uint16))
-        tifffile.imwrite(str(masks_dir / f"{ch}_VoteFrequency_float32.tiff"), vote_freq[ch].astype(np.float32))
 
         # Z-resample for display projections only (aspect correction).
         voxel_cfg_disp = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
-        freq_disp = _resample_z_for_display(vote_freq[ch], voxel_cfg_disp)
+        freq_native = (mask_counts[ch].astype(np.float32) / float(used)).astype(np.float32)
+        freq_disp = _resample_z_for_display(freq_native, voxel_cfg_disp)
         ch_dir = ensure_dir(vote_root / ch)
         _save_freq_projections(freq_disp, ch_dir, channel_key=ch, cmap=cmap)
 
+    # Save raw intensity once.
+    # - native (original Z): useful for reference / “same as input”
+    # - iso: useful for downstream analysis that expects isotropic-ish voxels
     for ch in channels:
         ch_cap = ch.capitalize()
-        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw.tiff"), avg_raw_iso[ch].astype(np.float32))
+        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw_native.tiff"), avg_raw[ch].astype(np.float32))
+        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw_iso.tiff"), avg_raw_iso[ch].astype(np.float32))
 
     df = pd.DataFrame(rows)
     df.to_excel(out_root / "AveragingSelection.xlsx", index=False)
@@ -436,6 +440,8 @@ def main() -> None:
         avg_cfg.get("enable_watershed_refinement", post_cfg_base.get("enable_watershed_refinement_averaging", True))
     )
     apply_sep = avg_cfg.get("apply_cell_separation", avg_cfg.get("channel_enable", None))
+    apply_sep_map = dict(apply_sep) if isinstance(apply_sep, dict) else {}
+    any_sep_enabled = any(bool(apply_sep_map.get(ch, False)) for ch in channels)
 
     for lvl in levels:
         print(f"[Averaging] Building PatternL{lvl} (threshold={lvl}% => count>={int(np.ceil((float(lvl)/100.0)*float(used)))})", flush=True)
@@ -455,18 +461,22 @@ def main() -> None:
             ch_cap = ch.capitalize()
             tifffile.imwrite(str(level_seg / f"Averaged_{ch_cap}_mask.tiff"), (avg_mask_lvl_iso[ch].astype(np.uint8) * 255))
 
-        # Post-analysis / refinement for this level (if enabled per channel)
+        # Cell separation / refinement (optional).
+        # If apply_cell_separation is false for all channels, do not create a Refinement folder
+        # and do not run post-analysis at all (saves time and avoids confusion).
         post_cfg = dict(post_cfg_base)
         post_cfg["enable_watershed_refinement"] = bool(avg_refine)
         if isinstance(apply_sep, dict):
             post_cfg["apply_cell_separation"] = dict(apply_sep)
 
-        refinement_dir = ensure_dir(level_root / "Refinement")
         instance_labels = {}
-        for ch in channels:
-            ch_cap = ch.capitalize()
-            ch_post_cfg, ch_enabled = _channel_post_cfg(post_cfg, ch)
-            if ch_enabled:
+        if any_sep_enabled:
+            refinement_dir = ensure_dir(level_root / "Refinement")
+            for ch in channels:
+                ch_cap = ch.capitalize()
+                ch_post_cfg, ch_enabled = _channel_post_cfg(post_cfg, ch)
+                if not ch_enabled:
+                    continue
                 ref_mask, labels = run_post_analysis(
                     intensity_stack=avg_raw_iso[ch],
                     binary_mask=avg_mask_lvl_iso[ch],
@@ -476,15 +486,6 @@ def main() -> None:
                 )
                 avg_mask_lvl_iso[ch] = ref_mask
                 instance_labels[ch] = labels
-            else:
-                ref_mask, _ = run_post_analysis(
-                    intensity_stack=avg_raw_iso[ch],
-                    binary_mask=avg_mask_lvl_iso[ch],
-                    cfg=ch_post_cfg,
-                    refinement_dir=refinement_dir,
-                    channel_name=f"Averaged_{ch_cap}_L{lvl}",
-                )
-                avg_mask_lvl_iso[ch] = ref_mask
 
         # Composition analysis for this level. (Folder is per-level, so naming can stay the same.)
         run_composition_profiling(
