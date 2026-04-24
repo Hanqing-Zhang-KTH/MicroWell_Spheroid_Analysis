@@ -242,6 +242,88 @@ def _plot_composition_from_table(
     plt.close()
 
 
+def _plot_smoothed_typeA_curves(
+    table: np.ndarray,
+    title: str,
+    x_label: str,
+    out_path: Path,
+    type_a_label: str,
+    fine_steps: int = 400,
+    smooth_sigma_bins: float = 2.0,
+) -> None:
+    """
+    Plot two smoothed curves on black background:
+    - TypeA fraction
+    - Non-TypeA fraction (TypeB + Overlap)
+    Empty is intentionally not shown.
+    """
+    if table.shape[1] == 0:
+        return
+
+    x = table[0, :]
+    if np.all(x == 0):
+        x = np.arange(1, table.shape[1] + 1, dtype=float)
+
+    shell = table[1, :]
+    A = table[3, :]
+    B = table[4, :]
+    overlap = table[5, :]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        total = np.where(shell > 0, shell, 1.0)
+        prop_A = np.where(shell > 0, A / total, 0.0)
+        prop_nonA = np.where(shell > 0, (B + overlap) / total, 0.0)
+
+    if x.size < 2:
+        x_fine = x.copy()
+        A_fine = prop_A.copy()
+        nonA_fine = prop_nonA.copy()
+    else:
+        fine_steps = max(50, int(fine_steps))
+        x_fine = np.linspace(float(x.min()), float(x.max()), fine_steps, dtype=np.float32)
+        A_fine = np.interp(x_fine, x.astype(np.float32), prop_A.astype(np.float32))
+        nonA_fine = np.interp(x_fine, x.astype(np.float32), prop_nonA.astype(np.float32))
+
+    # Smooth in x-index space (bin units)
+    sigma = max(0.0, float(smooth_sigma_bins))
+    if sigma > 0 and x_fine.size >= 5:
+        A_s = ndi.gaussian_filter1d(A_fine.astype(np.float32), sigma=sigma, mode="nearest")
+        nonA_s = ndi.gaussian_filter1d(nonA_fine.astype(np.float32), sigma=sigma, mode="nearest")
+    else:
+        A_s = A_fine
+        nonA_s = nonA_fine
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5), facecolor="black")
+    ax.set_facecolor("black")
+
+    type_a_str = str(type_a_label).lower()
+    type_a_display = "nucleus" if type_a_str == "nucleus" else "tumor"
+    ax.plot(x_fine, np.clip(A_s, 0, 1), color="#ff4d4d", linewidth=2.0, label=f"Type A ({type_a_display}) – smoothed")
+    ax.plot(x_fine, np.clip(nonA_s, 0, 1), color="#4da6ff", linewidth=2.0, label="Non-TypeA (Type B + Overlap) – smoothed")
+
+    ax.set_title(title, color="white")
+    ax.set_xlabel(x_label, color="white")
+    ax.set_ylabel("Composition (fraction)", color="white")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlim(float(x_fine.min()), float(x_fine.max()))
+    ax.tick_params(colors="white")
+    for spine in ax.spines.values():
+        spine.set_color("white")
+    ax.grid(True, color="white", alpha=0.15, linewidth=0.6)
+    leg = ax.legend(loc="upper right", frameon=True)
+    leg.get_frame().set_facecolor("black")
+    leg.get_frame().set_edgecolor("white")
+    for t in leg.get_texts():
+        t.set_color("white")
+
+    fig.tight_layout()
+    fig.savefig(str(out_path), dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _build_detected_cells_sheet(
     labels: np.ndarray,
     channel_name: str,
@@ -433,11 +515,25 @@ def run_composition_profiling(
                 out_path=dist_plots_dir / f"{sample_name}_EvenSteps_Composition_{label}.png",
                 type_a_label=label,
             )
+            _plot_smoothed_typeA_curves(
+                dist_table,
+                title=f"{sample_name} – Smoothed composition (equal steps, Type A={label})",
+                x_label="Distance from surface (µm, equal steps)",
+                out_path=dist_plots_dir / f"{sample_name}_EvenSteps_Composition_{label}_SmoothedCurves.png",
+                type_a_label=label,
+            )
             _plot_composition_from_table(
                 eqv_table,
                 title=f"{sample_name} – Composition vs partition (equal volume, Type A={label})",
                 x_label="Distance from surface (µm, equal-volume partitions)",
                 out_path=dist_plots_dir / f"{sample_name}_EquiVolume_Composition_{label}.png",
+                type_a_label=label,
+            )
+            _plot_smoothed_typeA_curves(
+                eqv_table,
+                title=f"{sample_name} – Smoothed composition (equal volume, Type A={label})",
+                x_label="Distance from surface (µm, equal-volume partitions)",
+                out_path=dist_plots_dir / f"{sample_name}_EquiVolume_Composition_{label}_SmoothedCurves.png",
                 type_a_label=label,
             )
 

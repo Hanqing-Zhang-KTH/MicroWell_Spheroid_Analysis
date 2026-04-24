@@ -253,14 +253,18 @@ def _save_freq_projections(freq: np.ndarray, out_dir: Path, channel_key: str, cm
     }
     for name, img in projs.items():
         img01 = _normalize01(img)
+        # 1) Presented pseudo-colored PNG (no title / no legend / no colorbar text)
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-        im = ax.imshow(img01, cmap=cmap, vmin=0.0, vmax=1.0)
-        ax.set_title(f"{channel_key} vote frequency – {name}")
+        ax.imshow(img01, cmap=cmap, vmin=0.0, vmax=1.0)
         ax.axis("off")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="frequency (0..1)")
-        fig.tight_layout()
-        fig.savefig(str(out_dir / f"{channel_key}_VoteFreq_{name}_{cmap}.png"), dpi=200, bbox_inches="tight")
+        fig.tight_layout(pad=0)
+        fig.savefig(str(out_dir / f"{channel_key}_VoteFreq_{name}_{cmap}.png"), dpi=200, bbox_inches="tight", pad_inches=0)
         plt.close(fig)
+
+        # 2) Analysis-friendly grayscale uint16 PNG (0..65535) for the max projection
+        img_u16 = np.clip(np.rint(img01 * 65535.0), 0, 65535).astype(np.uint16)
+        # tifffile can write PNG; keep name stable and explicit
+        tifffile.imwrite(str(out_dir / f"{channel_key}_VoteFreq_{name}_gray_u16.png"), img_u16)
 
 
 def _resample_z_for_display(vol_zyx: np.ndarray, voxel_cfg: dict) -> np.ndarray:
