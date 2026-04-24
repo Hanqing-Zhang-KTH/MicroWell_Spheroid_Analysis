@@ -283,6 +283,23 @@ def _resample_z_for_display(vol_zyx: np.ndarray, voxel_cfg: dict) -> np.ndarray:
     return ndi.zoom(vol, zoom=(zoom_z, 1.0, 1.0), order=1)
 
 
+def _isovolume_vote_counts(counts_zyx: np.ndarray, voxel_cfg: dict) -> np.ndarray:
+    """
+    Convert vote-count volume to an isovolume grid using nearest-neighbor interpolation.
+    This matches the mask isovolume behavior and avoids meaningless zero-padding in Z.
+    """
+    counts = np.asarray(counts_zyx, dtype=np.uint16)
+    vx = float(voxel_cfg.get("x", 1.0))
+    vy = float(voxel_cfg.get("y", 1.0))
+    vz = float(voxel_cfg.get("z", 1.0))
+    target = min(vx, vy, vz)
+    zoom = (vz / target, vy / target, vx / target)  # z, y, x
+    # NN zoom on float32 then round back to uint16
+    out = ndi.zoom(counts.astype(np.float32), zoom=zoom, order=0)
+    out = np.clip(np.rint(out), 0, np.iinfo(np.uint16).max).astype(np.uint16)
+    return out
+
+
 def main() -> None:
     args = _parse_args()
     sample_dirs = [Path(p) for p in args.sample_dir]
@@ -366,10 +383,8 @@ def main() -> None:
         raise RuntimeError("No samples processed for averaging.")
 
     avg_raw: dict[str, np.ndarray] = {}
-    vote_freq: dict[str, np.ndarray] = {}
     for ch in channels:
         avg_raw[ch] = (raw_sums[ch] / float(used)).astype(np.float32)
-        vote_freq[ch] = (mask_counts[ch].astype(np.float32) / float(used)).astype(np.float32)
 
     voxel_cfg = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
     avg_raw_iso: dict[str, np.ndarray] = {}
@@ -383,7 +398,7 @@ def main() -> None:
     patterns_dir = ensure_dir(out_root / "Pattern" / "Raw")
     masks_dir = ensure_dir(out_root / "Pattern" / "AccumulatedMasks")
 
-    # Save intermediate vote volumes (counts + frequency) under Pattern/AccumulatedMasks,
+    # Save intermediate vote volumes (vote counts, iso NN) under Pattern/AccumulatedMasks,
     # and save projections under AccumulatedMaskDistributions.
     post_cfg_for_votes = dict(cfg.get("post_analysis", {}))
     avg_cfg_for_votes = post_cfg_for_votes.get("averaging", {})
@@ -394,22 +409,18 @@ def main() -> None:
     for ch in channels:
         print(f"[Averaging] Saving vote accumulation for {ch}...", flush=True)
         # Save vote counts only (compact). Frequency is derived as count / N.
-        tifffile.imwrite(str(masks_dir / f"{ch}_VoteCount_uint16.tiff"), mask_counts[ch].astype(np.uint16))
+        counts_iso = _isovolume_vote_counts(mask_counts[ch], voxel_cfg)
+        tifffile.imwrite(str(masks_dir / f"{ch}_VoteCount_iso_uint16.tiff"), counts_iso.astype(np.uint16))
 
-        # Z-resample for display projections only (aspect correction).
-        voxel_cfg_disp = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
-        freq_native = (mask_counts[ch].astype(np.float32) / float(used)).astype(np.float32)
-        freq_disp = _resample_z_for_display(freq_native, voxel_cfg_disp)
+        # Projections use iso frequency (0..1)
+        freq_iso = (counts_iso.astype(np.float32) / float(used)).astype(np.float32)
         ch_dir = ensure_dir(vote_root / ch)
-        _save_freq_projections(freq_disp, ch_dir, channel_key=ch, cmap=cmap)
+        _save_freq_projections(freq_iso, ch_dir, channel_key=ch, cmap=cmap)
 
-    # Save raw intensity once.
-    # - native (original Z): useful for reference / “same as input”
-    # - iso: useful for downstream analysis that expects isotropic-ish voxels
+    # Save raw intensity once (iso only).
     for ch in channels:
         ch_cap = ch.capitalize()
-        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw_native.tiff"), avg_raw[ch].astype(np.float32))
-        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw_iso.tiff"), avg_raw_iso[ch].astype(np.float32))
+        tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw.tiff"), avg_raw_iso[ch].astype(np.float32))
 
     df = pd.DataFrame(rows)
     df.to_excel(out_root / "AveragingSelection.xlsx", index=False)
