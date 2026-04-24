@@ -393,10 +393,10 @@ def main() -> None:
         r_iso, _ = _isovolume(avg_raw[ch], (mask_counts[ch] > 0), voxel_cfg)
         avg_raw_iso[ch] = r_iso
 
-    # Output folder name: Averaging_<timestamp>_<NSamples>Samples_<ExperimentOrMixed>
+    # Output folder name: Averaging_<YYYYMMDDHH>_<NSamples>Samples_<ExperimentOrMixed>
     exp_names = sorted({r["Experiment"] for r in rows if isinstance(r, dict) and "Experiment" in r})
     exp_tag = exp_names[0] if len(exp_names) == 1 else "Mixed"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d%H")
     out_root = ensure_dir(results_root / f"Averaging_{timestamp}_{used}Samples_{exp_tag}")
     # Root selection outputs (keep as-is)
     patterns_dir = ensure_dir(out_root / "Pattern" / "Raw")

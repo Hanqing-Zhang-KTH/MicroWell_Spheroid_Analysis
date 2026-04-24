@@ -833,7 +833,7 @@ class SpheroidProfilingGUI(tk.Tk):
             return
 
         channel = str(self.dataset_channel_var.get()).strip().lower()
-        output_hint = f"Results/Averaging_YYYYMMDD_HHMMSS (alignment: {channel})"
+        output_hint = f"Results/Averaging_YYYYMMDDHH_<NSamples>Samples_<ExperimentOrMixed> (alignment: {channel})"
         preview_lines: list[str] = []
         for sid in selected_ids[:5]:
             row = self.results_tree.item(sid, "values")
