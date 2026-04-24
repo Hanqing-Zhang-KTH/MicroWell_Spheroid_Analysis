@@ -389,11 +389,15 @@ def main() -> None:
     voxel_cfg = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
     avg_raw_iso: dict[str, np.ndarray] = {}
     for ch in channels:
-        # Isovolume raw only once (mask differs per threshold level)
-        r_iso, _ = _isovolume(avg_raw[ch], (vote_freq[ch] > 0), voxel_cfg)
+        # Isovolume raw once using "any vote" as the support mask.
+        r_iso, _ = _isovolume(avg_raw[ch], (mask_counts[ch] > 0), voxel_cfg)
         avg_raw_iso[ch] = r_iso
 
-    out_root = ensure_dir(results_root / f"Averaging_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    # Output folder name: Averaging_<timestamp>_<NSamples>Samples_<ExperimentOrMixed>
+    exp_names = sorted({r["Experiment"] for r in rows if isinstance(r, dict) and "Experiment" in r})
+    exp_tag = exp_names[0] if len(exp_names) == 1 else "Mixed"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_root = ensure_dir(results_root / f"Averaging_{timestamp}_{used}Samples_{exp_tag}")
     # Root selection outputs (keep as-is)
     patterns_dir = ensure_dir(out_root / "Pattern" / "Raw")
     masks_dir = ensure_dir(out_root / "Pattern" / "AccumulatedMasks")

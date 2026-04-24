@@ -365,11 +365,31 @@ class SpheroidProfilingGUI(tk.Tk):
         self.active_experiment_name: str = "Default_Experiment"
 
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._load_config_into_ui()
         self.refresh_samples(silent=True)
         self.refresh_results_tree()
         self.after(400, self._drain_messages)
         self.after(5000, self._auto_refresh)
+
+    def _on_close(self) -> None:
+        """
+        Ensure any spawned worker subprocesses are terminated when GUI closes.
+        This prevents orphaned averaging/profiling runs continuing in background.
+        """
+        try:
+            self._stop_requested = True
+            for proc in [self._active_proc, self._avg_proc]:
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                self.destroy()
+            except Exception:
+                pass
 
     @staticmethod
     def _sanitize_paths(paths_cfg: dict) -> dict:
