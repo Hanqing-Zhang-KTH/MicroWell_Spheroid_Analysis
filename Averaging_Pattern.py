@@ -21,6 +21,10 @@ import pandas as pd
 import tifffile
 from scipy import ndimage as ndi
 from skimage import measure
+import matplotlib
+
+matplotlib.use("Agg")  # headless-safe plotting (no GUI backend)
+import matplotlib.pyplot as plt
 
 from functions.io_utils import load_json_config, ensure_dir
 from functions.post_analysis import run_post_analysis
@@ -215,6 +219,70 @@ def _channel_post_cfg(post_cfg: dict, channel_key: str) -> tuple[dict, bool]:
     return cfg_ch, enabled
 
 
+def _normalize01(img: np.ndarray) -> np.ndarray:
+    img = np.asarray(img, dtype=np.float32)
+    if img.size == 0:
+        return img.astype(np.float32)
+    vmin = float(np.nanmin(img))
+    vmax = float(np.nanmax(img))
+    if vmax > vmin:
+        return (img - vmin) / (vmax - vmin)
+    return np.zeros_like(img, dtype=np.float32)
+
+
+def _save_freq_projections(freq: np.ndarray, out_dir: Path, channel_key: str, cmap: str) -> None:
+    """
+    Save max-projection PNGs of a 3D frequency volume in 3 directions:
+    - along Z -> XY image
+    - along Y -> XZ image
+    - along X -> YZ image
+    """
+    out_dir = ensure_dir(out_dir)
+    freq = np.asarray(freq, dtype=np.float32)
+    if freq.ndim != 3:
+        raise ValueError(f"Expected 3D freq volume, got shape {freq.shape}")
+
+    proj_xy = freq.max(axis=0)  # (Y, X)
+    proj_xz = freq.max(axis=1)  # (Z, X)
+    proj_yz = freq.max(axis=2)  # (Z, Y)
+
+    projs = {
+        "XY_maxZ": proj_xy,
+        "XZ_maxY": proj_xz,
+        "YZ_maxX": proj_yz,
+    }
+    for name, img in projs.items():
+        img01 = _normalize01(img)
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+        im = ax.imshow(img01, cmap=cmap, vmin=0.0, vmax=1.0)
+        ax.set_title(f"{channel_key} vote frequency – {name}")
+        ax.axis("off")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="frequency (0..1)")
+        fig.tight_layout()
+        fig.savefig(str(out_dir / f"{channel_key}_VoteFreq_{name}_{cmap}.png"), dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+
+def _resample_z_for_display(vol_zyx: np.ndarray, voxel_cfg: dict) -> np.ndarray:
+    """
+    Resample only the Z axis so that Z spacing matches XY spacing (for display/projections).
+    XY is treated as pixel size 1 (relative), so only Z gets interpolated.
+    """
+    vol = np.asarray(vol_zyx, dtype=np.float32)
+    if vol.ndim != 3:
+        return vol
+    vx = float(voxel_cfg.get("x", 1.0))
+    vy = float(voxel_cfg.get("y", 1.0))
+    vz = float(voxel_cfg.get("z", 1.0))
+    vxy = max(1e-6, (vx + vy) / 2.0)
+    zoom_z = float(vz / vxy)
+    if abs(zoom_z - 1.0) < 1e-3:
+        return vol
+    # Keep memory bounded: cap Z growth to 4x.
+    zoom_z = max(0.25, min(4.0, zoom_z))
+    return ndi.zoom(vol, zoom=(zoom_z, 1.0, 1.0), order=1)
+
+
 def main() -> None:
     args = _parse_args()
     sample_dirs = [Path(p) for p in args.sample_dir]
@@ -297,29 +365,47 @@ def main() -> None:
     if used == 0:
         raise RuntimeError("No samples processed for averaging.")
 
-    threshold_count = int(np.ceil(0.5 * used))
     avg_raw: dict[str, np.ndarray] = {}
-    avg_mask: dict[str, np.ndarray] = {}
+    vote_freq: dict[str, np.ndarray] = {}
     for ch in channels:
         avg_raw[ch] = (raw_sums[ch] / float(used)).astype(np.float32)
-        avg_mask[ch] = (mask_counts[ch] >= threshold_count).astype(bool)
+        vote_freq[ch] = (mask_counts[ch].astype(np.float32) / float(used)).astype(np.float32)
 
     voxel_cfg = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
     avg_raw_iso: dict[str, np.ndarray] = {}
-    avg_mask_iso: dict[str, np.ndarray] = {}
     for ch in channels:
-        r_iso, m_iso = _isovolume(avg_raw[ch], avg_mask[ch], voxel_cfg)
+        # Isovolume raw only once (mask differs per threshold level)
+        r_iso, _ = _isovolume(avg_raw[ch], (vote_freq[ch] > 0), voxel_cfg)
         avg_raw_iso[ch] = r_iso
-        avg_mask_iso[ch] = m_iso
 
     out_root = ensure_dir(results_root / f"Averaging_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    patterns_dir = ensure_dir(out_root / "Patterns")
-    seg_dir = ensure_dir(patterns_dir / "Segmentation")
+    # Root selection outputs (keep as-is)
+    patterns_dir = ensure_dir(out_root / "Pattern" / "Raw")
+    masks_dir = ensure_dir(out_root / "Pattern" / "AccumulatedMasks")
+
+    # Save intermediate vote volumes (counts + frequency) under Pattern/AccumulatedMasks,
+    # and save projections under AccumulatedMaskDistributions.
+    post_cfg_for_votes = dict(cfg.get("post_analysis", {}))
+    avg_cfg_for_votes = post_cfg_for_votes.get("averaging", {})
+    if not isinstance(avg_cfg_for_votes, dict):
+        avg_cfg_for_votes = {}
+    cmap = str(avg_cfg_for_votes.get("mask_vote_projection_colormap", "hsv")).strip() or "hsv"
+    vote_root = ensure_dir(out_root / "AccumulatedMaskDistributions")
+    for ch in channels:
+        print(f"[Averaging] Saving vote accumulation for {ch}...", flush=True)
+        # Save counts (compact) and frequency (float) once.
+        tifffile.imwrite(str(masks_dir / f"{ch}_VoteCount_uint16.tiff"), mask_counts[ch].astype(np.uint16))
+        tifffile.imwrite(str(masks_dir / f"{ch}_VoteFrequency_float32.tiff"), vote_freq[ch].astype(np.float32))
+
+        # Z-resample for display projections only (aspect correction).
+        voxel_cfg_disp = cfg.get("composition_profiling", {}).get("voxel_size_um", {})
+        freq_disp = _resample_z_for_display(vote_freq[ch], voxel_cfg_disp)
+        ch_dir = ensure_dir(vote_root / ch)
+        _save_freq_projections(freq_disp, ch_dir, channel_key=ch, cmap=cmap)
 
     for ch in channels:
         ch_cap = ch.capitalize()
         tifffile.imwrite(str(patterns_dir / f"Averaged_{ch_cap}_raw.tiff"), avg_raw_iso[ch].astype(np.float32))
-        tifffile.imwrite(str(seg_dir / f"Averaged_{ch_cap}_mask.tiff"), (avg_mask_iso[ch].astype(np.uint8) * 255))
 
     df = pd.DataFrame(rows)
     df.to_excel(out_root / "AveragingSelection.xlsx", index=False)
@@ -328,57 +414,89 @@ def main() -> None:
             f.write(f"{r['Experiment']}/{r['Sample']}\n")
         f.write(f"\nAlignmentChannel: {channel}\n")
 
-    post_cfg = dict(cfg.get("post_analysis", {}))
-    avg_cfg = post_cfg.get("averaging", {})
-    if isinstance(avg_cfg, dict):
-        avg_refine = avg_cfg.get(
-            "enable_watershed_refinement",
-            post_cfg.get("enable_watershed_refinement_averaging", True),
-        )
-    else:
-        avg_refine = post_cfg.get("enable_watershed_refinement_averaging", True)
-    post_cfg["enable_watershed_refinement"] = bool(avg_refine)
+    # Generate multiple vote-threshold levels for averaged masks (L10/L30/L50/L70/L90)
+    post_cfg_base = dict(cfg.get("post_analysis", {}))
+    avg_cfg = post_cfg_base.get("averaging", {})
+    if not isinstance(avg_cfg, dict):
+        avg_cfg = {}
 
-    if isinstance(avg_cfg, dict):
-        avg_ch = avg_cfg.get("apply_cell_separation", avg_cfg.get("channel_enable", None))
-        if isinstance(avg_ch, dict):
-            post_cfg["apply_cell_separation"] = dict(avg_ch)
-    refinement_dir = ensure_dir(out_root / "Refinement")
+    levels_cfg = avg_cfg.get("mask_vote_levels", [10, 30, 50, 70, 90])
+    lvl_list: list[int] = []
+    if isinstance(levels_cfg, (list, tuple)):
+        for x in levels_cfg:
+            try:
+                v = int(x)
+            except Exception:
+                continue
+            if 0 < v <= 100:
+                lvl_list.append(v)
+    levels = sorted(set(lvl_list)) if lvl_list else [50]
 
-    instance_labels = {}
-    for ch in channels:
-        ch_cap = ch.capitalize()
-        ch_post_cfg, ch_enabled = _channel_post_cfg(post_cfg, ch)
-        if ch_enabled:
-            ref_mask, labels = run_post_analysis(
-                intensity_stack=avg_raw_iso[ch],
-                binary_mask=avg_mask_iso[ch],
-                cfg=ch_post_cfg,
-                refinement_dir=refinement_dir,
-                channel_name=f"Averaged_{ch_cap}",
-            )
-            avg_mask_iso[ch] = ref_mask
-            instance_labels[ch] = labels
-        else:
-            ref_mask, _ = run_post_analysis(
-                intensity_stack=avg_raw_iso[ch],
-                binary_mask=avg_mask_iso[ch],
-                cfg=ch_post_cfg,
-                refinement_dir=refinement_dir,
-                channel_name=f"Averaged_{ch_cap}",
-            )
-            avg_mask_iso[ch] = ref_mask
-
-    run_composition_profiling(
-        sample_name=f"Averaging_{channel}",
-        nucleus_mask=avg_mask_iso["nucleus"],
-        tumor_mask=avg_mask_iso["tumor"],
-        fibro_mask=avg_mask_iso["fibroblast"],
-        cfg=cfg.get("composition_profiling", {}),
-        out_dir=out_root,
-        instance_labels=instance_labels,
-        post_cfg=post_cfg,
+    avg_refine = bool(
+        avg_cfg.get("enable_watershed_refinement", post_cfg_base.get("enable_watershed_refinement_averaging", True))
     )
+    apply_sep = avg_cfg.get("apply_cell_separation", avg_cfg.get("channel_enable", None))
+
+    for lvl in levels:
+        print(f"[Averaging] Building PatternL{lvl} (threshold={lvl}% => count>={int(np.ceil((float(lvl)/100.0)*float(used)))})", flush=True)
+        thr_count = int(np.ceil((float(lvl) / 100.0) * float(used)))
+        level_root = ensure_dir(out_root / f"PatternL{lvl}")
+        level_seg = ensure_dir(level_root / "Patterns_Segmentation")
+
+        # Build masks for this level from vote counts
+        avg_mask_lvl_iso: dict[str, np.ndarray] = {}
+        for ch in channels:
+            mask_lvl = (mask_counts[ch] >= thr_count)
+            _, mask_lvl_iso = _isovolume(avg_raw[ch], mask_lvl, voxel_cfg)
+            avg_mask_lvl_iso[ch] = mask_lvl_iso
+
+        # Save mask stacks for this level (raw is saved once in out_root/Patterns)
+        for ch in channels:
+            ch_cap = ch.capitalize()
+            tifffile.imwrite(str(level_seg / f"Averaged_{ch_cap}_mask.tiff"), (avg_mask_lvl_iso[ch].astype(np.uint8) * 255))
+
+        # Post-analysis / refinement for this level (if enabled per channel)
+        post_cfg = dict(post_cfg_base)
+        post_cfg["enable_watershed_refinement"] = bool(avg_refine)
+        if isinstance(apply_sep, dict):
+            post_cfg["apply_cell_separation"] = dict(apply_sep)
+
+        refinement_dir = ensure_dir(level_root / "Refinement")
+        instance_labels = {}
+        for ch in channels:
+            ch_cap = ch.capitalize()
+            ch_post_cfg, ch_enabled = _channel_post_cfg(post_cfg, ch)
+            if ch_enabled:
+                ref_mask, labels = run_post_analysis(
+                    intensity_stack=avg_raw_iso[ch],
+                    binary_mask=avg_mask_lvl_iso[ch],
+                    cfg=ch_post_cfg,
+                    refinement_dir=refinement_dir,
+                    channel_name=f"Averaged_{ch_cap}_L{lvl}",
+                )
+                avg_mask_lvl_iso[ch] = ref_mask
+                instance_labels[ch] = labels
+            else:
+                ref_mask, _ = run_post_analysis(
+                    intensity_stack=avg_raw_iso[ch],
+                    binary_mask=avg_mask_lvl_iso[ch],
+                    cfg=ch_post_cfg,
+                    refinement_dir=refinement_dir,
+                    channel_name=f"Averaged_{ch_cap}_L{lvl}",
+                )
+                avg_mask_lvl_iso[ch] = ref_mask
+
+        # Composition analysis for this level. (Folder is per-level, so naming can stay the same.)
+        run_composition_profiling(
+            sample_name=f"Averaging_{channel}",
+            nucleus_mask=avg_mask_lvl_iso["nucleus"],
+            tumor_mask=avg_mask_lvl_iso["tumor"],
+            fibro_mask=avg_mask_lvl_iso["fibroblast"],
+            cfg=cfg.get("composition_profiling", {}),
+            out_dir=level_root,
+            instance_labels=instance_labels,
+            post_cfg=post_cfg,
+        )
 
     print(f"[Averaging] Completed. Output: {out_root}")
 

@@ -1,7 +1,7 @@
 {
   "paths": {
     "dataset_root": "Dataset",
-    "results_root": "Results"
+    "results_root": "D:\\Mikaela_Project\\Results"
   },
   "//copyright": [
     "Research group:",
@@ -37,7 +37,7 @@
     "global_thresholds": {
       "tumor_rfp": 280,
       "fibroblast_gfp": 295,
-      "nucleus_draq5": 490
+      "nucleus_draq5": 1350
     },
     "dl_mode": {
       "network_type": "3d",
@@ -61,7 +61,7 @@
   },
   "preprocessing": {
     "enable_gaussian_blur": true,
-    "gaussian_sigma": 1.6,
+    "gaussian_sigma": 1.2,
     "gaussian_kernel_size": 5
   },
   "manual_mask_preprocessing": {
@@ -75,16 +75,24 @@
     "enable_watershed_refinement": true,
     "averaging": {
       "enable_watershed_refinement": true,
+      "mask_vote_levels": [
+        10,
+        30,
+        50,
+        70,
+        90
+      ],
+      "mask_vote_projection_colormap": "viridis",
       "apply_cell_separation": {
-        "nucleus": true,
-        "tumor": true,
-        "fibroblast": true
+        "nucleus": false,
+        "tumor": false,
+        "fibroblast": false
       }
     },
     "apply_cell_separation": {
       "nucleus": false,
-      "tumor": false,
-      "fibroblast": false
+      "tumor": true,
+      "fibroblast": true
     },
     "watershed_downsize_ratio": 0.5,
     "window_size": 3,
